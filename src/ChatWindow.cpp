@@ -16,6 +16,7 @@
 #include "imgui_internal.h"
 #include "nlohmann/json.hpp"
 #include <iostream> 
+#include "PromptManager.hpp"
 
 using json = nlohmann::json;
 
@@ -152,7 +153,6 @@ void ChatWindow::Render()
         _ttsClient.Stop(); memset(_inputBuffer, 0, sizeof(_inputBuffer));
     }
 }
-
 void ChatWindow::SendMessage()
 {
     std::string user_prompt = _inputBuffer;
@@ -168,43 +168,18 @@ void ChatWindow::SendMessage()
 
     std::thread([this]() {
         
-        // ... (获取 model_info_string 和 system_prompt 的代码完全不变) ...
+        // 1. 获取模型可用资源信息
         std::string model_info_string = LAppDelegate::GetInstance()->GetModelInfoAsJsonString();
-        json model_info_json;
-        try {
-             model_info_json = json::parse(model_info_string);
-        } catch (const json::parse_error& e) {
-             std::cerr << "Failed to parse model info JSON: " << e.what() << std::endl;
-             {
-                 std::lock_guard<std::mutex> lock(_mutex);
-                 _history.push_back({"assistant", "[Internal Error] Failed to get model info."});
-                 _isResponding = false;
-             }
-             return;
-        }
-
-        std::string language_instruction;
-        if (_ttsEnabled && _ttsLanguage == 1) 
-        {
-            language_instruction = 
-                "\nCRITICAL INSTRUCTION: Generate TWO text fields: 'display_text' (in Chinese) and 'tts_text' (a Japanese translation).\n"
-                "Example: {\"expression\": \"f02\", \"motion_group\": \"TapBody\", \"display_text\": \"你好\", \"tts_text\": \"こんにちは\"}";
-        }
-        else 
-        {
-            language_instruction = 
-                "\nCRITICAL INSTRUCTION: Generate TWO text fields: 'display_text' and 'tts_text'. Both MUST be the same Chinese text.\n"
-                "Example: {\"expression\": \"f01\", \"motion_group\": null, \"display_text\": \"好的\", \"tts_text\": \"好的\"}";
-        }
         
-        std::string system_prompt = 
-            "You are an AI that outputs ONLY a single, raw JSON object. Your entire response MUST start with `{` and end with `}`. NO MARKDOWN, NO ```json, NO EXPLANATIONS. ABSOLUTELY NO TEXT OUTSIDE THE JSON OBJECT.\n"
-            "The JSON structure is: {\"expression\": string|null, \"motion_group\": string|null, \"display_text\": string, \"tts_text\": string}.\n"
-            "Available expressions: " + model_info_json["expressions"].dump() + "\n"
-            "Available motions: " + model_info_json["motions"].dump() + "\n"
-            + language_instruction +
-            "\nFINAL WARNING: Output only the raw JSON. Nothing else.";
+        // --- 操，核心修改在这里 ---
+        // 2. 根据UI选项决定是否使用日文TTS
+        bool use_japanese = (_ttsEnabled && _ttsLanguage == 1);
+        
+        // 3. 调用单例的 PromptManager 生成终极系统提示词
+        std::string system_prompt = PromptManager::GetInstance().buildSystemPrompt(model_info_string, use_japanese);
+        // --- 修改结束 ---
 
+        // 4. 准备要发送给 Ollama 的消息历史
         std::vector<OllamaClient::Message> messages_to_send;
         messages_to_send.push_back({"system", system_prompt});
         {
@@ -216,6 +191,7 @@ void ChatWindow::SendMessage()
             }
         }
         
+        // 5. 设置流式回调函数
         auto on_chunk = [this](const std::string& content_chunk) {
             std::lock_guard<std::mutex> lock(_mutex);
             _accumulatedJson += content_chunk;
@@ -227,21 +203,16 @@ void ChatWindow::SendMessage()
             try
             {
                 std::string raw_response = _accumulatedJson;
-                std::string clean_json_str; // 默认是空的
+                std::string clean_json_str;
 
                 size_t first_brace = raw_response.find('{');
                 size_t last_brace = raw_response.rfind('}');
                 
                 if (first_brace != std::string::npos && last_brace != std::string::npos && last_brace > first_brace) {
-                    // 如果找到了，就提取干净的 JSON
                     clean_json_str = raw_response.substr(first_brace, last_brace - first_brace + 1);
                 }
                 
-                // ======== 操！核心改动在这里！========
-                // 不管找没找到，都直接把 clean_json_str (可能是空的) 丢给解析器。
-                // 如果是空的，它自己会抛异常，然后被下面的 catch 接住。
                 json final_json = json::parse(clean_json_str);
-                // ===================================
                 
                 LAppModel* model = LAppLive2DManager::GetInstance()->GetModel(0);
 
@@ -252,7 +223,7 @@ void ChatWindow::SendMessage()
                     if (final_json.contains("motion_group") && final_json["motion_group"].is_string()) {
                         std::string group = final_json["motion_group"];
                         if (model->GetModelSetting()->GetMotionCount(group.c_str()) > 0) {
-                            model->StartRandomMotion(group.c_str(), LAppDefine::PriorityNormal);
+                            model->StartRandomMotion(group.c_str(), LAppDefine::PriorityForce);
                         }
                     }
                 }
@@ -279,6 +250,7 @@ void ChatWindow::SendMessage()
             _isResponding = false;
         };
         
+        // 6. 执行请求
         _client.StreamChat(messages_to_send, on_chunk, on_done);
 
     }).detach();

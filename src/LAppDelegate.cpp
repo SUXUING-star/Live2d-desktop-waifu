@@ -427,11 +427,12 @@ LAppDelegate::LAppDelegate():
 
     _view = new LAppView();
     _textureManager = new LAppTextureManager();
+     _randomTalker = new RandomTalker(); // 创建实例
 }
 
 LAppDelegate::~LAppDelegate()
 {
-
+    delete _randomTalker; // 释放内存
 }
 
 void LAppDelegate::InitializeCubism()

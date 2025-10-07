@@ -186,6 +186,9 @@ private:
     */
     void ReleaseExpressions();
 
+    Live2D::Cubism::Framework::csmBool         _isExpressionPlaying;   // 是否有临时表情正在播放
+    Live2D::Cubism::Framework::csmFloat32      _expressionEndTime;     // 临时表情的结束时间
+
     Csm::ICubismModelSetting* _modelSetting; ///< モデルセッティング情報
     Csm::csmString _modelHomeDir; ///< モデルセッティングが置かれたディレクトリ
     Csm::csmFloat32 _userTimeSeconds; ///< デルタ時間の積算値[秒]

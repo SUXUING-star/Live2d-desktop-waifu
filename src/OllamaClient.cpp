@@ -1,28 +1,23 @@
-// src/OllamaClient.cpp
 #include "OllamaClient.hpp"
 #include "nlohmann/json.hpp"
 #include <iostream>
 #include <sstream>
 
-// 操！我们要直接用 curl 的 C API！
+// 不再需要 <stdexcept> 了，因为我们不抛异常了
 #include <curl/curl.h>
 
 using json = nlohmann::json;
 
 OllamaClient::OllamaClient() {}
 
-// 这是 libcurl 的数据写入回调函数
-// 每次收到一小块数据，这个函数就会被调用
 static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata)
 {
-    // userdata 就是我们传进去的 on_chunk 函数
     auto on_chunk = static_cast<std::function<void(const std::string&)>*>(userdata);
-    
-    // 我们收到的数据大小是 size * nmemb
+    if (!on_chunk) return 0;
+
     size_t real_size = size * nmemb;
     std::string data(ptr, real_size);
 
-    // 把收到的原始数据（可能包含多个JSON对象）切分成一行一行的
     std::stringstream ss(data);
     std::string line;
     while (std::getline(ss, line))
@@ -30,12 +25,10 @@ static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdat
         if (line.empty() || line == "\r") continue;
         try 
         {
-            // 解析每一行 JSON
             json chunk_json = json::parse(line);
             if (chunk_json.contains("message") && chunk_json["message"].contains("content")) 
             {
                 std::string content_chunk = chunk_json["message"]["content"];
-                // 真正地、实时地把一小块文本块通过回调传出去！
                 (*on_chunk)(content_chunk);
             }
         } 
@@ -44,22 +37,27 @@ static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdat
             std::cerr << "JSON parse error in stream: " << e.what() << "\nInvalid JSON line: " << line << std::endl;
         }
     }
-
-    return real_size; // 必须返回处理的数据大小
+    return real_size;
 }
 
 void OllamaClient::StreamChat(const std::vector<Message>& messages,
                               std::function<void(const std::string&)> on_chunk,
                               std::function<void()> on_done)
 {
-    CURL* curl;
+    // --- 操，全局初始化/清理放到主程序里去做，这里只管创建和销毁句柄 ---
+    // curl_global_init(CURL_GLOBAL_ALL); // 删掉，这玩意应该在程序启动时调用一次就行
+    
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::cerr << "[OllamaClient] Failed to initialize curl" << std::endl;
+        on_done(); // 初始化失败，直接调用 on_done 返回
+        return;
+    }
+
+    struct curl_slist *headers = NULL;
     CURLcode res;
 
-    // 初始化 libcurl
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl = curl_easy_init();
-    if(curl) {
-        // --- 1. 准备请求数据 ---
+    try {
         json messages_json = json::array();
         for (const auto& msg : messages) {
             messages_json.push_back({{"role", msg.role}, {"content", msg.content}});
@@ -71,36 +69,43 @@ void OllamaClient::StreamChat(const std::vector<Message>& messages,
         };
         std::string request_body = request_body_json.dump();
         
-        // --- 2. 设置 HTTP Header ---
-        struct curl_slist *headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/json");
-
-        // --- 3. 配置 curl 句柄 ---
+        
         curl_easy_setopt(curl, CURLOPT_URL, _apiUrl.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-        // 关键！设置写入回调函数
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        // 关键！把 on_chunk 函数的指针传给回调
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &on_chunk);
+        
+        // 设置5秒连接超时和30秒总超时
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L); 
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
-        // --- 4. 执行请求 ---
-        // 这是一个同步阻塞调用，但因为我们设置了回调，
-        // 它会在收到数据的过程中，不断地调用我们的 write_callback。
-        // 这就是真·流式处理！
         res = curl_easy_perform(curl);
         
-        // --- 5. 检查错误并清理 ---
-        if(res != CURLE_OK) {
-            std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+        // --- 操，核心修改在这里：不再抛异常，而是打印错误 ---
+        if (res != CURLE_OK) {
+            std::cerr << "[OllamaClient] curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+            // 即使出错了，我们也要继续往下走，调用 on_done
         }
+    }
+    catch (const std::exception& e) {
+        // 捕获一些意外的错误，比如json构建失败
+        std::cerr << "[OllamaClient] Exception during request setup: " << e.what() << std::endl;
+    }
 
-        curl_easy_cleanup(curl);
+    // --- 无论成功、失败还是异常，最终都会执行到这里 ---
+    
+    // 1. 调用 on_done，通知调用方“我这边完事了”
+    //    如果网络成功，on_done 会处理收到的数据
+    //    如果网络失败，on_done 会处理一个空的数据，然后静默失败
+    on_done();
+
+    // 2. 清理资源
+    if (headers) {
         curl_slist_free_all(headers);
     }
-    curl_global_cleanup();
+    curl_easy_cleanup(curl);
     
-    // 当 curl_easy_perform() 返回时，意味着整个流已经结束
-    on_done();
+    // curl_global_cleanup(); // 删掉，这玩意应该在程序退出时调用一次
 }

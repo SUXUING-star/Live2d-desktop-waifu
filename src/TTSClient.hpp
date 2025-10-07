@@ -28,7 +28,10 @@ public:
     TTSClient();
     ~TTSClient();
     void Speak(const std::string& text, const std::string& language);
+    float EstimateDuration(const std::string& text); // <-- 新增函数
     void Stop();
+
+    std::string GetApiUrl() const { return _apiUrl; }
 
 private:
     void AudioThread(std::string text, std::string language);

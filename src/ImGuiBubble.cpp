@@ -102,74 +102,99 @@ ImGuiBubble::~ImGuiBubble()
 
 void ImGuiBubble::Show(float screenX, float screenY, const std::string& message)
 {
-    if (message.empty()) 
+    if (message.empty())
     {
         _shouldShow = false;
         return;
     }
 
-    _screenX = screenX;
-    _screenY = screenY;
-    _message = message;
     _shouldShow = true;
 
-    if (_shouldShow)
-    {
-        // --- 步骤一：计算文字需要多大的空间 ---
-         ImGui::PushFont(ImGui::GetFont());
-        ImVec2 textSize = ImGui::CalcTextSize(_message.c_str(), NULL, false, 300.0f);
-        ImGui::PopFont();
-        
-        // --- 步骤二：定义样式和尺寸 ---
-        ImVec2 padding(15, 15);
+    // --- 步骤一：定义样式和尺寸 ---
+    const float maxWidth = 300.0f;           // 气泡最大宽度
+    const ImVec2 padding(15.0f, 12.0f);      // 内部文字的边距
+    const float rounding = 12.0f;            // 圆角大小
+    const float border_thickness = 1.5f;     // 边框粗细
+    const float tail_width = 20.0f;
+    const float tail_height = 15.0f;
+    const ImU32 bg_color = IM_COL32(255, 255, 255, 220); // 背景色: 白色半透明
+    const ImU32 border_color = IM_COL32(0, 0, 0, 100);    // 边框色: 黑色半透明
+    const ImU32 text_color = IM_COL32(0, 0, 0, 220);    // 字体颜色: 深灰色，比纯黑柔和
 
-        float rounding = 12.0f; // 你可以改成 8.0f, 10.0f, 15.0f... 随便你喜欢
+    // --- 步骤二：精确计算换行后文字需要的空间 ---
+    // 关键: 计算宽度时要减去两边的 padding，这样文本区才不会挤到边框上
+    ImVec2 textSize = ImGui::CalcTextSize(message.c_str(), NULL, false, maxWidth - padding.x * 2.0f);
+    
+    // --- 步骤三：计算整个气泡的最终大小 ---
+    // 加上 padding，得到内容区的总大小
+    ImVec2 content_size = ImVec2(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f);
+    
+    // --- 步骤四：创建“无形”宿主窗口 ---
+    // 锚点 (0.5, 1.0)，让气泡底部中心对准目标坐标
+    ImGui::SetNextWindowPos(ImVec2(screenX, screenY), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    // 窗口尺寸要包含尖角的高度
+    ImGui::SetNextWindowSize(ImVec2(content_size.x, content_size.y + tail_height));
+    ImGui::SetNextWindowBgAlpha(0.0f); // 宿主窗口完全透明
 
-        float tail_width = 20.0f;
-        float tail_height = 15.0f;
-        ImU32 bg_color = IM_COL32(255, 255, 255, 220);
-        ImU32 text_color = IM_COL32(0, 0, 0, 255);
+    // 推入样式，取消宿主窗口自身的边框和内边距
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
 
-        // --- 步骤三：计算整个气泡（包括尖角）的最终位置和大小 ---
-        ImVec2 bubble_pos = ImVec2(_screenX - (textSize.x/2.0f) - padding.x, _screenY - textSize.y - padding.y*2.0f - tail_height);
-        ImVec2 bubble_size = ImVec2(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f);
-        
-        // 我们用一个“无形”的窗口来容纳我们的自定义绘制
-        ImGui::SetNextWindowPos(ImVec2(_screenX, _screenY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-        ImGui::SetNextWindowSize(ImVec2(bubble_size.x, bubble_size.y + tail_height));
-        ImGui::SetNextWindowBgAlpha(0.0f); // 关键！让ImGui的默认背景完全透明！
+    ImGui::Begin("BubbleHost", NULL,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse // 操，把滚动条和鼠标滚轮都给他禁了！
+    );
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // --- 步骤五：画牛逼的带边框背景和无缝衔接的尖角 ---
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetWindowPos(); // 宿主窗口左上角
 
-        ImGui::Begin("BubbleHost", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
-        
-        // --- 步骤四：自己画背景和尖角！---
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        ImVec2 p = ImGui::GetWindowPos();
-        
-        // 1. 画主体（一个圆角拉满的矩形，就是椭圆）
-        draw_list->AddRectFilled(
-            p, 
-            ImVec2(p.x + bubble_size.x, p.y + bubble_size.y), 
-            bg_color, 
-            rounding
-        );
+    // 1. 先画边框 (一个比背景大一点的圆角矩形)
+    draw_list->AddRectFilled(
+        p,
+        ImVec2(p.x + content_size.x, p.y + content_size.y),
+        border_color,
+        rounding
+    );
 
-        // 2. 画尖角 (这次它在我们的“无形”窗口之内，绝对不会被裁掉)
-        ImVec2 p1 = ImVec2(p.x + bubble_size.x * 0.2f, p.y + bubble_size.y);
-        ImVec2 p2 = ImVec2(p1.x + tail_width, p1.y);
-        ImVec2 p3 = ImVec2(p1.x + tail_width * 0.5f, p1.y + tail_height);
-        draw_list->AddTriangleFilled(p1, p2, p3, bg_color);
-        
-        // --- 步骤五：在画好的背景上写字 ---
-        draw_list->AddText(
-            ImVec2(p.x + padding.x, p.y + padding.y),
-            text_color,
-            _message.c_str()
-        );
+    // 2. 再画背景 (在边框内层，小一点的圆角矩形)
+    draw_list->AddRectFilled(
+        ImVec2(p.x + border_thickness, p.y + border_thickness),
+        ImVec2(p.x + content_size.x - border_thickness, p.y + content_size.y - border_thickness),
+        bg_color,
+        rounding > border_thickness ? rounding - border_thickness : 0.0f // 内层圆角要减去边框厚度
+    );
+    
+    // 3. 画无缝衔接的尖角 (最骚的操作)
+    //    尖角由两个三角形组成：一个大的做边框，一个小的做填充，完美覆盖接缝
+    ImVec2 tail_p1 = ImVec2(p.x + content_size.x * 0.5f - tail_width * 0.5f, p.y + content_size.y - border_thickness);
+    ImVec2 tail_p2 = ImVec2(tail_p1.x + tail_width, tail_p1.y);
+    ImVec2 tail_p3 = ImVec2(tail_p1.x + tail_width * 0.5f, tail_p1.y + tail_height);
 
-        ImGui::End();
+    // 先画大的黑色边框三角形
+    draw_list->AddTriangleFilled(
+        ImVec2(tail_p1.x - border_thickness, tail_p1.y),
+        ImVec2(tail_p2.x + border_thickness, tail_p2.y),
+        ImVec2(tail_p3.x, tail_p3.y + border_thickness),
+        border_color
+    );
+    // 再画小的白色填充三角形，盖住边框三角形的顶部，实现无缝衔接
+    draw_list->AddTriangleFilled(tail_p1, tail_p2, tail_p3, bg_color);
 
-        ImGui::PopStyleVar();
-    }
+
+    // --- 步骤六：在画好的背景上，用 ImGui::TextWrapped 控件显示文字 ---
+    // 它的好处是：原生支持换行，且不会产生滚动条！还能选中！
+    ImGui::SetCursorPos(padding);
+    ImGui::PushStyleColor(ImGuiCol_Text, text_color);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + (maxWidth - padding.x * 2.0f)); // 设置换行宽度
+
+    ImGui::TextUnformatted(message.c_str()); // 用 TextUnformatted 性能更好
+
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+
+    ImGui::End();
+
+    ImGui::PopStyleVar(2);
 }

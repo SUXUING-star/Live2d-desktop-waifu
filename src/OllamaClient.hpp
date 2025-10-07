@@ -20,6 +20,8 @@ public:
                     std::function<void(const std::string&)> on_chunk,
                     std::function<void()> on_done);
 
+    std::string GetApiUrl() const { return _apiUrl; }
+
 private:
     const std::string _model = "gemma3:4b";
     const std::string _apiUrl = "http://127.0.0.1:11434/api/chat";

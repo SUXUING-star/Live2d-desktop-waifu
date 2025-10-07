@@ -29,8 +29,6 @@ GLuint LAppSpriteShader::GetShaderId() const
 
 GLuint LAppSpriteShader::CreateShader()
 {
-    // VVVVVV 我们不再从文件加载了！直接把代码写在这里！ VVVVVV
-
     // 顶点着色器源码
     const GLchar* vertexShaderSource =
         "#version 120\n"

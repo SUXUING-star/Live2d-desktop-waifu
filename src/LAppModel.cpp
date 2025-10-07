@@ -33,6 +33,8 @@ LAppModel::LAppModel()
     : LAppModel_Common()
     , _modelSetting(NULL)
     , _userTimeSeconds(0.0f)
+    , _isExpressionPlaying(false)  
+    , _expressionEndTime(0.0f)  
 {
     if (MocConsistencyValidationEnable)
     {
@@ -373,6 +375,12 @@ void LAppModel::Update()
         _expressionManager->UpdateMotion(_model, deltaTimeSeconds); // 表情でパラメータ更新（相対変化）
     }
 
+    if (_isExpressionPlaying && _userTimeSeconds >= _expressionEndTime)
+    {
+        _expressionManager->StopAllMotions(); // 时间到了，停止所有表情
+        _isExpressionPlaying = false;         // 重置标志位
+    }
+
     //ドラッグによる変化
     //ドラッグによる顔の向きの調整
     _model->AddParameterValue(_idParamAngleX, _dragX * 30); // -30から30の値を加える
@@ -559,8 +567,12 @@ void LAppModel::SetExpression(const csmChar* expressionID)
 
     if (motion != NULL)
     {
-        _expressionManager->StopAllMotions(); // 在开始新表情前，先把所有旧的表情动作全他妈停了！
+        _expressionManager->StopAllMotions(); // 停止旧表情
         _expressionManager->StartMotion(motion, false);
+
+        // --- 操，加上这几行，记录结束时间 ---
+        _isExpressionPlaying = true;
+        _expressionEndTime = _userTimeSeconds + 4.0f; // 就让所有表情都持续4秒钟！简单粗暴有效！
     }
     else
     {
@@ -583,7 +595,7 @@ void LAppModel::SetRandomExpression()
         if (i == no)
         {
             csmString name = (*map_ite).First;
-            SetExpression(name.GetRawString());
+            SetExpression(name.GetRawString()); // 直接调用我们修改过的SetExpression就行了，代码不用重复写
             return;
         }
         i++;

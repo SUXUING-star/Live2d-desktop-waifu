@@ -244,33 +244,25 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y)
     if (_tapCount >= 5)
     {
         const char* messages[] = { "别点我了","手不累吗？" };
-        int randomIndex = rand() % 5;
+        int randomIndex = rand() % 2;
         LAppDelegate::GetInstance()->ShowBubbleMessage(messages[randomIndex], 3.0f);
         _tapCount = 0; // 触发后清零，免得一直弹
     }
 
     // 5. 开始判断！
-    //    首先判断点(motionX, motionY)在不在整个模型的画布内
-    //    注意画布的范围是 [-width/2, width/2] 和 [-height/2, height/2]
+    // 只要点击了模型身体，就触发随机对话
     if (motionX >= -canvasWidth / 2.0f && motionX <= canvasWidth / 2.0f &&
         motionY >= -canvasHeight / 2.0f && motionY <= canvasHeight / 2.0f)
     {
-        // 在画布内，再判断是头还是身体
-        if (motionY > head_min_y) // 在上半部分，算你点了头
+        if (motionY > head_min_y) // 点了头，还是换表情
         {
-            if (DebugLogEnable)
-            {
-                LAppPal::PrintLogLn("[APP]hit area: [Fucking Head By Correct API!]");
-            }
+            if (DebugLogEnable) LAppPal::PrintLogLn("[APP]hit area: [Head]");
             model->SetRandomExpression();
         }
-        else // 在下半部分，算你点了身体
+        else // 点了身体，触发随机对话
         {
-            if (DebugLogEnable)
-            {
-                LAppPal::PrintLogLn("[APP]hit area: [Fucking Body By Correct API!]");
-            }
-            model->StartRandomMotion(MotionGroupTapBody, PriorityNormal, FinishedMotion, BeganMotion);
+            if (DebugLogEnable) LAppPal::PrintLogLn("[APP]hit area: [Body - Triggering Talk]");
+            LAppDelegate::GetInstance()->GetRandomTalker()->TriggerRandomTalk();
         }
     }
 }

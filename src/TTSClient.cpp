@@ -1,4 +1,3 @@
-// src/TTSClient.cpp
 #define MINIAUDIO_IMPLEMENTATION
 #define NOMINMAX
 #include "TTSClient.hpp"
@@ -9,7 +8,7 @@
 
 using json = nlohmann::json;
 
-// miniaudio 回调
+// --- miniaudio 回调和其他辅助函数 (这部分完全不变) ---
 void pcm_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
     TTSClient* client = (TTSClient*)pDevice->pUserData;
@@ -41,6 +40,7 @@ static AVSampleFormat ma_format_to_av_sample_fmt(ma_format format) {
         default:            return AV_SAMPLE_FMT_NONE;
     }
 }
+// --- (以上部分不变) ---
 
 TTSClient::TTSClient() : _shouldStop(false), _networkFinished(true) {}
 TTSClient::~TTSClient() { Stop(); }
@@ -71,6 +71,12 @@ int TTSClient::ReadPacket(void* opaque, uint8_t* buf, int buf_size) {
         if (client->_shouldStop) return AVERROR_EOF;
         client->_networkCv.wait_for(lock, std::chrono::milliseconds(100));
     }
+    
+    // --- 操，核心改动在这里：如果网络结束了，但buffer还是空的，说明网络请求压根就失败了 ---
+    if (client->_networkFinished && client->_networkBuffer.empty()) {
+        return AVERROR_EOF; // 直接告诉ffmpeg没数据了，优雅退出
+    }
+    
     if (client->_networkCursor >= client->_networkBuffer.size() && client->_networkFinished) {
         return AVERROR_EOF;
     }
@@ -92,24 +98,42 @@ void TTSClient::AudioThread(std::string text, std::string language) {
         _networkBuffer.clear();
         _networkCursor = 0;
     }
+    
+    // --- 操，网络线程的逻辑大改 ---
     std::thread network_thread([this, text, language]() {
         json request_body = {{"text", text}, {"text_language", language}};
-        cpr::Post(cpr::Url{_apiUrl}, cpr::Body{request_body.dump()}, cpr::Header{{"Content-Type", "application/json"}},
-                  cpr::WriteCallback{[this](const std::string& data, intptr_t) -> bool {
-                      if (_shouldStop) return false;
-                      {
-                          std::lock_guard<std::mutex> lock(_networkMutex);
-                          _networkBuffer.insert(_networkBuffer.end(), data.begin(), data.end());
-                      }
-                      _networkCv.notify_one();
-                      return true;
-                  }});
+        
+        // 1. 设置超时，5秒钟连不上就滚蛋
+        cpr::Response r = cpr::Post(
+            cpr::Url{_apiUrl},
+            cpr::Body{request_body.dump()},
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Timeout{5000}, // 5秒超时
+            cpr::WriteCallback{[this](const std::string& data, intptr_t) -> bool {
+                if (_shouldStop) return false;
+                {
+                    std::lock_guard<std::mutex> lock(_networkMutex);
+                    _networkBuffer.insert(_networkBuffer.end(), data.begin(), data.end());
+                }
+                _networkCv.notify_one();
+                return true;
+            }}
+        );
+
+        // 2. 检查请求结果
+        if (r.error || r.status_code != 200) {
+            std::cerr << "[TTSClient] Network Error: " << r.error.message << " (Status code: " << r.status_code << ")" << std::endl;
+            // 网络出错了，buffer是空的，但我们还是要通知解码线程“网络结束了”
+        }
+        
+        // 3. 无论成功失败，都标记网络部分结束
         _networkFinished = true;
         _networkCv.notify_one();
     });
     network_thread.detach();
 
     // Phase 2: FFmpeg Init
+    // ... (后面的解码和播放逻辑完全不变，因为错误处理在 ReadPacket 和 network_thread 里已经做好了)
     const int avio_buffer_size = 8192;
     unsigned char* avio_buffer = (unsigned char*)av_malloc(avio_buffer_size);
     if (!avio_buffer) return;
@@ -119,7 +143,13 @@ void TTSClient::AudioThread(std::string text, std::string language) {
     _formatContext = avformat_alloc_context();
     if (!_formatContext) goto cleanup;
     _formatContext->pb = _avioContext;
-    if (avformat_open_input(&_formatContext, nullptr, nullptr, nullptr) != 0) goto cleanup;
+    
+    // --- 操，这里也加个保护 ---
+    if (avformat_open_input(&_formatContext, nullptr, nullptr, nullptr) != 0) {
+        std::cerr << "[TTSClient] avformat_open_input failed. Likely due to network failure and no data." << std::endl;
+        goto cleanup; // 如果打开失败（比如网络错误导致没数据），直接跳到清理
+    }
+    
     if (avformat_find_stream_info(_formatContext, nullptr) < 0) goto cleanup;
 
     int stream_index = av_find_best_stream(_formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
@@ -136,7 +166,6 @@ void TTSClient::AudioThread(std::string text, std::string language) {
     ma_device_config deviceConfig;
     deviceConfig = ma_device_config_init(ma_device_type_playback);
     deviceConfig.playback.format = ma_format_s16;
-    // 操！这次我严格按照你给的 API 定义来写！
     deviceConfig.playback.channels = _codecContext->ch_layout.nb_channels;
     deviceConfig.sampleRate = _codecContext->sample_rate;
     deviceConfig.dataCallback = pcm_data_callback;
@@ -151,7 +180,6 @@ void TTSClient::AudioThread(std::string text, std::string language) {
     av_opt_set_sample_fmt(_swrContext, "in_sample_fmt", _codecContext->sample_fmt, 0);
     
     AVChannelLayout out_ch_layout;
-    // 操！这次我把参数传对了！
     av_channel_layout_default(&out_ch_layout, deviceConfig.playback.channels);
     av_opt_set_chlayout(_swrContext, "out_chlayout", &out_ch_layout, 0);
     av_opt_set_int(_swrContext, "out_sample_rate", deviceConfig.sampleRate, 0);
@@ -176,7 +204,6 @@ void TTSClient::AudioThread(std::string text, std::string language) {
             if (avcodec_send_packet(_codecContext, packet) == 0) {
                 while (avcodec_receive_frame(_codecContext, _frame) == 0) {
                     uint8_t* out_buffer = nullptr;
-                    // 操！这次我把参数传对了！
                     av_samples_alloc(&out_buffer, NULL, deviceConfig.playback.channels, _frame->nb_samples, ma_format_to_av_sample_fmt(deviceConfig.playback.format), 0);
 
                     int converted_samples = swr_convert(_swrContext, &out_buffer, _frame->nb_samples, (const uint8_t**)_frame->data, _frame->nb_samples);
@@ -215,4 +242,10 @@ cleanup:
         if(_avioContext->buffer) { av_freep(&_avioContext->buffer); }
         av_freep(&_avioContext); _avioContext = nullptr;
     }
+}
+
+// --- EstimateDuration 不变 ---
+float TTSClient::EstimateDuration(const std::string& text) {
+    const float chars_per_second = 7.0f; 
+    return static_cast<float>(text.length()) / chars_per_second;
 }

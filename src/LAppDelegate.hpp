@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "RandomTalker.hpp" 
 #include "ImGuiBubble.hpp"
 #include "ContextMenu.hpp"
 #include <GL/glew.h>
@@ -102,6 +103,8 @@ public:
     void BuildMenuItems();
 
     std::string GetModelInfoAsJsonString();
+    
+    RandomTalker* GetRandomTalker() { return _randomTalker; }
 
 private:
     /**
@@ -152,7 +155,7 @@ private:
     char _searchBuffer[256];         // 存搜索文字的缓冲区
 
     ImVec2 _searchBoxPos;  // 存储搜索框应该出现的位置
-
+    RandomTalker*   _randomTalker; // 核心随机对话对象
     
 };
 
