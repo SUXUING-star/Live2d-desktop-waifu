@@ -1,0 +1,31 @@
+# 编译产物
+build/
+build*/
+bin/
+*.obj
+*.lib
+*.exe
+*.dll
+*.pdb
+*.ilk
+
+# Visual Studio cruft
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+*.suo
+
+# Live2D SDK 核心文件 (!!! CRITICAL !!!)
+Core/
+Framework/
+Samples/Common/
+Samples/OpenGL/thirdParty/
+
+# 大型二进制库（让用户自己下载）
+libs/
