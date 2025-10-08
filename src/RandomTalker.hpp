@@ -18,9 +18,6 @@ public:
 private:
     void SendToOllama(const std::string& prompt);
     void HandleOllamaResponse(const std::string& raw_json);
-
-    OllamaClient _ollamaClient;
-    TTSClient    _ttsClient;
     std::mutex   _mutex;
      bool         _isBusy;
     std::chrono::steady_clock::time_point _lastTriggerTime;

@@ -29,12 +29,28 @@ using namespace Live2D::Cubism::Framework;
 using namespace Live2D::Cubism::Framework::DefaultParameterId;
 using namespace LAppDefine;
 
+namespace {
+    // 这个函数就是我们新的回调
+    void OnMotionFinished(ACubismMotion* self)
+    {
+        // 1. 从动作实例中获取我们之前存进去的 LAppModel 指针
+        LAppModel* model = reinterpret_cast<LAppModel*>(self->GetFinishedMotionCustomData());
+        
+        // 2. 如果成功拿到指针，就设置“回正”标志
+        if (model)
+        {
+            model->SetReturningToDefaultFlag(true);
+        }
+    }
+}
+
 LAppModel::LAppModel()
     : LAppModel_Common()
     , _modelSetting(NULL)
     , _userTimeSeconds(0.0f)
     , _isExpressionPlaying(false)  
     , _expressionEndTime(0.0f)  
+    , _isReturningToDefault(false)
 {
     if (MocConsistencyValidationEnable)
     {
@@ -340,97 +356,98 @@ void LAppModel::Update()
     _dragX = _dragManager->GetX();
     _dragY = _dragManager->GetY();
 
-    // モーションによるパラメータ更新の有無
     csmBool motionUpdated = false;
 
-    //-----------------------------------------------------------------
-    _model->LoadParameters(); // 前回セーブされた状態をロード
-    if (_motionManager->IsFinished())
+    // 操，这句很重要，每次循环开始都从模型的“干净”状态开始
+    _model->LoadParameters();
+    
+    // --- 动作和表情更新逻辑 (你已经改好的，保持不变) ---
+    if (_isReturningToDefault)
     {
-        // モーションの再生がない場合、待機モーションの中からランダムで再生する
+        _isReturningToDefault = false; 
+        _motionManager->StopAllMotions();
         StartRandomMotion(MotionGroupIdle, PriorityIdle);
+        motionUpdated = _motionManager->UpdateMotion(_model, deltaTimeSeconds);
+    }
+    else if (_motionManager->IsFinished())
+    {
+        StartRandomMotion(MotionGroupIdle, PriorityIdle);
+        motionUpdated = _motionManager->UpdateMotion(_model, deltaTimeSeconds);
     }
     else
     {
-        motionUpdated = _motionManager->UpdateMotion(_model, deltaTimeSeconds); // モーションを更新
+        motionUpdated = _motionManager->UpdateMotion(_model, deltaTimeSeconds);
     }
-    _model->SaveParameters(); // 状態を保存
-    //-----------------------------------------------------------------
 
-    // 不透明度
-    _opacity = _model->GetModelOpacity();
-
-    // まばたき
     if (!motionUpdated)
     {
         if (_eyeBlink != NULL)
         {
-            // メインモーションの更新がないとき
-            _eyeBlink->UpdateParameters(_model, deltaTimeSeconds); // 目パチ
+            _eyeBlink->UpdateParameters(_model, deltaTimeSeconds);
         }
     }
 
     if (_expressionManager != NULL)
     {
-        _expressionManager->UpdateMotion(_model, deltaTimeSeconds); // 表情でパラメータ更新（相対変化）
+        _expressionManager->UpdateMotion(_model, deltaTimeSeconds);
     }
 
     if (_isExpressionPlaying && _userTimeSeconds >= _expressionEndTime)
     {
-        _expressionManager->StopAllMotions(); // 时间到了，停止所有表情
-        _isExpressionPlaying = false;         // 重置标志位
+        _expressionManager->StopAllMotions();
+        _isExpressionPlaying = false;
     }
 
-    //ドラッグによる変化
-    //ドラッグによる顔の向きの調整
-    _model->AddParameterValue(_idParamAngleX, _dragX * 30); // -30から30の値を加える
+    // --- 其他标准参数更新 ---
+
+    // 拖拽
+    _model->AddParameterValue(_idParamAngleX, _dragX * 30);
     _model->AddParameterValue(_idParamAngleY, _dragY * 30);
     _model->AddParameterValue(_idParamAngleZ, _dragX * _dragY * -30);
-
-    //ドラッグによる体の向きの調整
-    _model->AddParameterValue(_idParamBodyAngleX, _dragX * 10); // -10から10の値を加える
-
-    //ドラッグによる目の向きの調整
-    _model->AddParameterValue(_idParamEyeBallX, _dragX); // -1から1の値を加える
+    _model->AddParameterValue(_idParamBodyAngleX, _dragX * 10);
+    _model->AddParameterValue(_idParamEyeBallX, _dragX);
     _model->AddParameterValue(_idParamEyeBallY, _dragY);
 
-    // 呼吸など
+    // 呼吸
     if (_breath != NULL)
     {
         _breath->UpdateParameters(_model, deltaTimeSeconds);
     }
 
-    // 物理演算の設定
-    if (_physics != NULL)
-    {
-        _physics->Evaluate(_model, deltaTimeSeconds);
-    }
-
-    // リップシンクの設定
-    if (_lipSync)
-    {
-        // リアルタイムでリップシンクを行う場合、システムから音量を取得して0〜1の範囲で値を入力します。
-        csmFloat32 value = 0.0f;
-
-        // 状態更新/RMS値取得
-        _wavFileHandler.Update(deltaTimeSeconds);
-        value = _wavFileHandler.GetRms();
-
-        for (csmUint32 i = 0; i < _lipSyncIds.GetSize(); ++i)
-        {
-            _model->AddParameterValue(_lipSyncIds[i], value, 0.8f);
-        }
-    }
-
-    // ポーズの設定
+    // 姿势
     if (_pose != NULL)
     {
         _pose->UpdateParameters(_model, deltaTimeSeconds);
     }
 
-    _model->Update();
+    // --- 操！核心改动：把唇同步逻辑移动到这里！ ---
+    if (_lipSync)
+    {
+        const float value = LAppDelegate::GetInstance()->GetTTSClient()->GetCurrentVolume();
 
+        // if (_debugMode)
+        // {
+        //      LAppPal::PrintLogLn("   当前音量: %.2f", value);
+        // }
+       
+        for (csmUint32 i = 0; i < _lipSyncIds.GetSize(); ++i)
+        {
+            // 注意！这里用 SetParameterValue 替换 AddParameterValue 可能更霸道，直接覆盖，防止表情残留影响
+            // 但是 AddParameterValue 配合权重（比如微笑时嘴巴张得小一点）效果更自然。我们先用 Add 试试。
+            _model->AddParameterValue(_lipSyncIds[i], value, 0.8f);
+        }
+    }
+
+    // --- 物理运算必须在所有参数都他妈设置好之后再搞 ---
+    if (_physics != NULL)
+    {
+        _physics->Evaluate(_model, deltaTimeSeconds);
+    }
+
+    // 最后，让模型根据所有最终计算好的参数来更新顶点
+    _model->Update();
 }
+
 
 CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt32 no, csmInt32 priority, ACubismMotion::FinishedMotionCallback onFinishedMotionHandler, ACubismMotion::BeganMotionCallback onBeganMotionHandler)
 {
@@ -448,8 +465,6 @@ CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt
     }
 
     const csmString fileName = _modelSetting->GetMotionFileName(group, no);
-
-    //ex) idle_0
     csmString name = Utils::CubismString::GetFormatedString("%s_%d", group, no);
     CubismMotion* motion = static_cast<CubismMotion*>(_motions[name.GetRawString()]);
     csmBool autoDelete = false;
@@ -458,35 +473,47 @@ CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt
     {
         csmString path = fileName;
         path = _modelHomeDir + path;
-
         csmByte* buffer;
         csmSizeInt size;
         buffer = CreateBuffer(path.GetRawString(), &size);
         motion = static_cast<CubismMotion*>(LoadMotion(buffer, size, NULL, onFinishedMotionHandler, onBeganMotionHandler, _modelSetting, group, no, _motionConsistency));
-
         if (motion)
         {
             motion->SetEffectIds(_eyeBlinkIds, _lipSyncIds);
-            autoDelete = true; // 終了時にメモリから削除
+            autoDelete = true;
         }
         else
         {
-            CubismLogError("Can't start motion %s .", path.GetRawString());
-            // ロードできなかったモーションのReservePriorityをリセットする
             _motionManager->SetReservePriority(PriorityNone);
             DeleteBuffer(buffer, path.GetRawString());
             return InvalidMotionQueueEntryHandleValue;
         }
-
         DeleteBuffer(buffer, path.GetRawString());
     }
     else
     {
+        // 如果外部传了回调，就用外部的，否则清空
         motion->SetBeganMotionHandler(onBeganMotionHandler);
         motion->SetFinishedMotionHandler(onFinishedMotionHandler);
     }
 
-    //voice
+    // --- 操，核心修改在这里：使用函数指针和 UserData ---
+    if (strcmp(group, MotionGroupIdle) != 0)
+    {
+        // 1. 把 this 指针存到动作的用户数据里
+        motion->SetFinishedMotionCustomData(this);
+        
+        // 2. 把我们的全局函数设置为回调
+        motion->SetFinishedMotionHandler(OnMotionFinished);
+    }
+    else
+    {
+       // 清空回调和数据
+        motion->SetFinishedMotionHandler(NULL);
+        motion->SetFinishedMotionCustomData(NULL);
+    }
+    // --- 修改结束 ---
+
     csmString voice = _modelSetting->GetMotionSoundFileName(group, no);
     if (strcmp(voice.GetRawString(), "") != 0)
     {
@@ -499,7 +526,7 @@ CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt
     {
         LAppPal::PrintLogLn("[APP]start motion: [%s_%d]", group, no);
     }
-    return  _motionManager->StartMotionPriority(motion, autoDelete, priority);
+    return _motionManager->StartMotionPriority(motion, autoDelete, priority);
 }
 
 CubismMotionQueueEntryHandle LAppModel::StartRandomMotion(const csmChar* group, csmInt32 priority, ACubismMotion::FinishedMotionCallback onFinishedMotionHandler, ACubismMotion::BeganMotionCallback onBeganMotionHandler)
@@ -601,6 +628,7 @@ void LAppModel::SetRandomExpression()
         i++;
     }
 }
+
 
 void LAppModel::ReloadRenderer()
 {

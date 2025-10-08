@@ -5,7 +5,7 @@
  * that can be found at https://www.live2d.com/eula/live2d-open-software-license-agreement_en.html.
  */
 
-#include "LAppDelegate.hpp"
+
 #include <iostream>
 #include <GL/glew.h>
 
@@ -26,6 +26,8 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+#include "LAppDelegate.hpp"
+#include "AutoStartManager.hpp"
 #include "LAppView.hpp"
 #include "LAppPal.hpp"
 #include "LAppDefine.hpp"
@@ -427,12 +429,16 @@ LAppDelegate::LAppDelegate():
 
     _view = new LAppView();
     _textureManager = new LAppTextureManager();
-     _randomTalker = new RandomTalker(); // 创建实例
+    _randomTalker = new RandomTalker(); // 创建实例
+    _ollamaClient = new OllamaClient();
+    _ttsClient = new TTSClient();
 }
 
 LAppDelegate::~LAppDelegate()
 {
     delete _randomTalker; // 释放内存
+    delete _ollamaClient;
+    delete _ttsClient;
 }
 
 void LAppDelegate::InitializeCubism()
@@ -663,7 +669,24 @@ void LAppDelegate::BuildMenuItems()
         }
     });
     
-    _contextMenu.AddItem({ "---" }); // ImGui风格的分隔线，名字是啥不重要
+    _contextMenu.AddItem({ "---" }); // 分隔线
+
+        // 1. 先检查当前自启状态
+    bool isEnabled = AutoStartManager::IsAutoStartEnabled();
+    
+    // 2. 构造菜单项的显示文本，用复选框的形式
+    std::string menuItemText = (isEnabled ? "[x] " : "[ ] ") + std::string("开机自启");
+    
+    // 3. 添加菜单项，点击时执行切换操作
+    _contextMenu.AddItem({
+        menuItemText,
+        [this, isEnabled]() {
+            // 点击时，执行与当前状态相反的操作
+            AutoStartManager::SetAutoStart(!isEnabled);
+            // 操，操作完要立即刷新菜单，这样复选框状态才能立刻更新！
+            this->BuildMenuItems(); 
+        }
+    });
 
     _contextMenu.AddItem({
         "退出",
@@ -685,7 +708,7 @@ std::string LAppDelegate::GetModelInfoAsJsonString()
 
     json info;
     
-    // --- 收集所有表情 ---
+    // 1. 收集表情 (不变)
     json expressions = json::array();
     for (int i = 0; i < modelSetting->GetExpressionCount(); ++i)
     {
@@ -693,27 +716,29 @@ std::string LAppDelegate::GetModelInfoAsJsonString()
     }
     info["expressions"] = expressions;
 
-    // --- 收集所有动作 ---
-    json motions = json::object();
+    // --- 操，核心修改在这里：构建详细的动作地图 ---
+    json motions_map = json::object();
     for (int i = 0; i < modelSetting->GetMotionGroupCount(); ++i)
     {
-        const char* groupNameCStr = modelSetting->GetMotionGroupName(i);
-        std::string groupName = groupNameCStr;
+        const char* group_name_cstr = modelSetting->GetMotionGroupName(i);
+        std::string group_name = group_name_cstr;
         
         json motion_list = json::array();
-        for (int j = 0; j < modelSetting->GetMotionCount(groupNameCStr); ++j)
+        for (int j = 0; j < modelSetting->GetMotionCount(group_name_cstr); ++j)
         {
-            std::string motionFileName = modelSetting->GetMotionFileName(groupNameCStr, j);
-            size_t pos = motionFileName.find(".motion3.json");
+            // 获取并清理动作文件名，让AI看得更舒服
+            std::string motion_file_name = modelSetting->GetMotionFileName(group_name_cstr, j);
+            size_t pos = motion_file_name.find(".motion3.json");
             if (pos != std::string::npos)
             {
-                motionFileName.erase(pos);
+                motion_file_name.erase(pos);
             }
-            motion_list.push_back(motionFileName);
+            // 我们只把清理后的名字放进去
+            motion_list.push_back(motion_file_name);
         }
-        motions[groupName] = motion_list;
+        motions_map[group_name] = motion_list;
     }
-    info["motions"] = motions;
+    info["motions"] = motions_map; // 使用 "motions" 作为键名
 
-    return info.dump(); // .dump() 会把 json 对象转成字符串
+    return info.dump();
 }

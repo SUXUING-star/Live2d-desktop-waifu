@@ -88,7 +88,7 @@ void RandomTalker::SendToOllama(const std::string& prompt)
     };
     
     // 5. 执行请求
-    _ollamaClient.StreamChat(messages_to_send, on_chunk, on_done);
+    LAppDelegate::GetInstance()->GetOllamaClient()->StreamChat(messages_to_send, on_chunk, on_done);
 }
 
 
@@ -106,14 +106,21 @@ void RandomTalker::HandleOllamaResponse(const std::string& raw_json)
 
         LAppModel* model = LAppLive2DManager::GetInstance()->GetModel(0);
         if (model) {
+            // 表情逻辑不变
             if (final_json.contains("expression") && final_json["expression"].is_string()) {
                 model->SetExpression(final_json["expression"].get<std::string>().c_str());
             }
 
-            if (final_json.contains("motion_group") && final_json["motion_group"].is_string()) {
-                std::string group = final_json["motion_group"];
-                if (model->GetModelSetting()->GetMotionCount(group.c_str()) > 0) {
-                    model->StartRandomMotion(group.c_str(), LAppDefine::PriorityForce);
+            // --- 操，核心执行逻辑修改在这里 ---
+            if (final_json.contains("motion_group") && final_json["motion_group"].is_string() &&
+                final_json.contains("motion_index") && final_json["motion_index"].is_number_integer())
+            {
+                std::string group = final_json["motion_group"].get<std::string>();
+                int index = final_json["motion_index"].get<int>();
+
+                // 安全检查
+                if (model->GetModelSetting()->GetMotionCount(group.c_str()) > index && index >= 0) {
+                    model->StartMotion(group.c_str(), index, LAppDefine::PriorityForce);
                 }
             }
         }
@@ -121,11 +128,13 @@ void RandomTalker::HandleOllamaResponse(const std::string& raw_json)
         std::string display_text = final_json.value("display_text", "[内容错误]");
         std::string tts_text = final_json.value("tts_text", "");
 
-        float bubble_duration = tts_text.empty() ? 5.0f : (_ttsClient.EstimateDuration(tts_text) + 1.0f);
+         float bubble_duration = tts_text.empty() ? 5.0f : (LAppDelegate::GetInstance()->GetTTSClient()->EstimateDuration(tts_text) + 1.0f);
+    
         LAppDelegate::GetInstance()->ShowBubbleMessage(display_text, bubble_duration); 
 
         if (!tts_text.empty()) {
-            _ttsClient.Speak(tts_text, "日文");
+        
+            LAppDelegate::GetInstance()->GetTTSClient()->Speak(tts_text, "日文");
         }
     }
     catch (const std::exception& e)

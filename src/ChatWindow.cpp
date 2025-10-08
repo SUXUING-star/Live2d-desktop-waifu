@@ -20,8 +20,7 @@
 
 using json = nlohmann::json;
 
-ChatWindow::ChatWindow()
-    : _isOpen(false), _client(), _isResponding(false), _accumulatedJson("")
+ChatWindow::ChatWindow() : _isOpen(false), _isResponding(false), _accumulatedJson("")
 {
     memset(_inputBuffer, 0, sizeof(_inputBuffer));
     _windowPos = ImVec2(0, 0);
@@ -45,8 +44,9 @@ void ChatWindow::Render()
     {
         ImGui::End();
         if (!_isOpen) {
-             _history.clear(); _streamingResponse.clear(); _isResponding = false;
-             _ttsClient.Stop(); memset(_inputBuffer, 0, sizeof(_inputBuffer));
+            _history.clear(); _streamingResponse.clear(); _isResponding = false;
+            LAppDelegate::GetInstance()->GetTTSClient()->Stop();
+            memset(_inputBuffer, 0, sizeof(_inputBuffer));
         }
         return;
     }
@@ -138,7 +138,7 @@ void ChatWindow::Render()
     }
 
     // --- 语音控制区域 ---
-    if (ImGui::Checkbox("开启语音", &_ttsEnabled)) { if (!_ttsEnabled) _ttsClient.Stop(); }
+    if (ImGui::Checkbox("开启语音", &_ttsEnabled)) { if (!_ttsEnabled) LAppDelegate::GetInstance()->GetTTSClient()->Stop(); }
     ImGui::SameLine(); ImGui::Spacing(); ImGui::SameLine();
     ImGui::BeginDisabled(!_ttsEnabled);
     ImGui::RadioButton("中文", &_ttsLanguage, 0); ImGui::SameLine(); ImGui::RadioButton("日文", &_ttsLanguage, 1);
@@ -150,7 +150,8 @@ void ChatWindow::Render()
 
     if (!_isOpen) {
         _history.clear(); _streamingResponse.clear(); _isResponding = false;
-        _ttsClient.Stop(); memset(_inputBuffer, 0, sizeof(_inputBuffer));
+        LAppDelegate::GetInstance()->GetTTSClient()->Stop();
+        memset(_inputBuffer, 0, sizeof(_inputBuffer));
     }
 }
 void ChatWindow::SendMessage()
@@ -216,18 +217,26 @@ void ChatWindow::SendMessage()
                 
                 LAppModel* model = LAppLive2DManager::GetInstance()->GetModel(0);
 
-                if (model) {
+                 if (model) {
+                    // 表情逻辑不变
                     if (final_json.contains("expression") && final_json["expression"].is_string()) {
                         model->SetExpression(final_json["expression"].get<std::string>().c_str());
                     }
-                    if (final_json.contains("motion_group") && final_json["motion_group"].is_string()) {
-                        std::string group = final_json["motion_group"];
-                        if (model->GetModelSetting()->GetMotionCount(group.c_str()) > 0) {
-                            model->StartRandomMotion(group.c_str(), LAppDefine::PriorityForce);
+
+                    // --- 操，核心执行逻辑修改在这里 ---
+                    if (final_json.contains("motion_group") && final_json["motion_group"].is_string() &&
+                        final_json.contains("motion_index") && final_json["motion_index"].is_number_integer())
+                    {
+                        std::string group = final_json["motion_group"].get<std::string>();
+                        int index = final_json["motion_index"].get<int>();
+
+                        // 安全检查：确保group存在，且index在范围内
+                        if (model->GetModelSetting()->GetMotionCount(group.c_str()) > index && index >= 0) {
+                            // 调用精确播放函数！
+                            model->StartMotion(group.c_str(), index, LAppDefine::PriorityForce);
                         }
                     }
                 }
-                
                 if (final_json.contains("display_text") && final_json["display_text"].is_string()) {
                     std::string display_text = final_json["display_text"].get<std::string>();
                     if (!display_text.empty()) {
@@ -236,7 +245,7 @@ void ChatWindow::SendMessage()
                     if (_ttsEnabled && final_json.contains("tts_text") && final_json["tts_text"].is_string()) {
                         std::string tts_text = final_json["tts_text"].get<std::string>();
                         std::string lang_for_tts = (_ttsLanguage == 0) ? "中文" : "日文";
-                        _ttsClient.Speak(tts_text, lang_for_tts);
+                        LAppDelegate::GetInstance()->GetTTSClient()->Speak(tts_text, lang_for_tts);
                     }
                 }
             }
@@ -251,7 +260,7 @@ void ChatWindow::SendMessage()
         };
         
         // 6. 执行请求
-        _client.StreamChat(messages_to_send, on_chunk, on_done);
+        LAppDelegate::GetInstance()->GetOllamaClient()->StreamChat(messages_to_send, on_chunk, on_done);
 
     }).detach();
 }

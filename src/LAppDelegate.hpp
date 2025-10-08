@@ -15,6 +15,8 @@
 #include "LAppAllocator_Common.hpp"
 #include "imgui.h"
 #include "ChatWindow.hpp" 
+#include "OllamaClient.hpp"
+#include "TTSClient.hpp"
 
 class LAppView;
 class LAppTextureManager;
@@ -105,6 +107,8 @@ public:
     std::string GetModelInfoAsJsonString();
     
     RandomTalker* GetRandomTalker() { return _randomTalker; }
+    OllamaClient* GetOllamaClient() { return _ollamaClient; }
+    TTSClient*    GetTTSClient()    { return _ttsClient; }
 
 private:
     /**
@@ -156,6 +160,8 @@ private:
 
     ImVec2 _searchBoxPos;  // 存储搜索框应该出现的位置
     RandomTalker*   _randomTalker; // 核心随机对话对象
+    OllamaClient* _ollamaClient;
+    TTSClient*    _ttsClient;
     
 };
 

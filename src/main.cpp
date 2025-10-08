@@ -8,7 +8,11 @@
 #include "LAppDelegate.hpp"
 #include <windows.h>
 
-int main()
+#ifdef _DEBUG
+int main(int argc, char* argv[])
+#else
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+#endif
 {
     // Setting the console character encoding to UTF-8
     UINT preConsoleOutputCP = GetConsoleOutputCP();

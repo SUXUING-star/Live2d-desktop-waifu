@@ -131,6 +131,8 @@ public:
     float GetModelRight() const;
     float GetModelTop() const;
     float GetModelBottom() const;
+
+    void SetReturningToDefaultFlag(Live2D::Cubism::Framework::csmBool  flag) { _isReturningToDefault = flag; }
     
 
 protected:
@@ -185,6 +187,8 @@ private:
     * すべての表情データを解放する。
     */
     void ReleaseExpressions();
+
+    Live2D::Cubism::Framework::csmBool         _isReturningToDefault; // 是否正在返回默认姿态
 
     Live2D::Cubism::Framework::csmBool         _isExpressionPlaying;   // 是否有临时表情正在播放
     Live2D::Cubism::Framework::csmFloat32      _expressionEndTime;     // 临时表情的结束时间
